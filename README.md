@@ -158,4 +158,3 @@ MIT License. (Open to change)
 ---
 
 DOPE — Digital Optical Performance Engine
-Embedded ballistic computation, cleanly separated from everything else.
