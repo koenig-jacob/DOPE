@@ -6,7 +6,6 @@ DOPE is a deterministic embedded ballistic computation engine written in C++17 a
 
 It is the core math and physics layer for a digital precision optic system. DOPE consumes normalized sensor data and produces a structured firing solution. It does not perform rendering, target detection, image processing, UI management, or communication. It computes trajectories. Nothing more.
 
----
 
 ## What DOPE Does
 
