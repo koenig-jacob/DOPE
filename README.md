@@ -1,7 +1,6 @@
 # DOPE
 
 ## Digital Optical Performance Engine
-
 DOPE is a deterministic embedded ballistic computation engine written in C++17 and designed for high-performance microcontrollers such as the ESP32-P4.
 
 It is the core math and physics layer for a digital precision optic system. DOPE consumes normalized sensor data and produces a structured firing solution. It does not perform rendering, target detection, image processing, UI management, or communication. It computes trajectories. Nothing more.
