@@ -92,3 +92,42 @@ TEST_F(CartridgeTest, 300WinMag190gr) {
     EXPECT_GT(result.velocity_at_target_ms, 300.0f);
     EXPECT_LT(result.tof_s, 2.5f);
 }
+
+// Test 9mm 124gr FMJ from compact pistol barrel
+TEST_F(CartridgeTest, NineMm124grPistol) {
+    SolverParams p = makeCartridgeParams(100.0f, 0.150f, DragModel::G1, 365.0f, 124.0f, 4.0f, 12.0f); // ~1200 fps nominal from 4"
+
+    float zero_angle = solver.solveZeroAngle(p, 25.0f);
+    EXPECT_FALSE(std::isnan(zero_angle));
+    p.launch_angle_rad = zero_angle;
+
+    SolverResult result = solver.integrate(p);
+    EXPECT_TRUE(result.valid);
+
+    // Rough sanity check for 9mm pistol at 100m
+    EXPECT_GT(result.velocity_at_target_ms, 150.0f);
+    EXPECT_LT(result.tof_s, 1.2f);
+}
+
+// Test 9mm 124gr FMJ from PDW barrel and compare to pistol profile
+TEST_F(CartridgeTest, NineMm124grPdwVsPistol) {
+    SolverParams pistol = makeCartridgeParams(100.0f, 0.150f, DragModel::G1, 365.0f, 124.0f, 4.0f, 12.0f);
+    SolverParams pdw = makeCartridgeParams(100.0f, 0.150f, DragModel::G1, 410.0f, 124.0f, 8.0f, 12.0f);
+
+    float pistol_zero = solver.solveZeroAngle(pistol, 25.0f);
+    float pdw_zero = solver.solveZeroAngle(pdw, 25.0f);
+    EXPECT_FALSE(std::isnan(pistol_zero));
+    EXPECT_FALSE(std::isnan(pdw_zero));
+
+    pistol.launch_angle_rad = pistol_zero;
+    pdw.launch_angle_rad = pdw_zero;
+
+    SolverResult pistol_result = solver.integrate(pistol);
+    SolverResult pdw_result = solver.integrate(pdw);
+    EXPECT_TRUE(pistol_result.valid);
+    EXPECT_TRUE(pdw_result.valid);
+
+    // At the same distance, PDW profile should be faster and get there sooner.
+    EXPECT_GT(pdw_result.velocity_at_target_ms, pistol_result.velocity_at_target_ms);
+    EXPECT_LT(pdw_result.tof_s, pistol_result.tof_s);
+}

@@ -87,7 +87,9 @@ const CartridgeProfile kCartridgeProfiles[] = {
     { ".308 Win 175gr SMK", 0.505f, 0, 792.0f, 175.0f, 0.308f, 24.0f, 25.0f, 10.0f, 31.2f },
     { ".223 Rem 55gr FMJ", 0.245f, 0, 990.0f, 55.0f, 0.223f, 20.0f, 25.0f, 12.0f, 19.0f },
     { "6.5 Creedmoor 140gr ELD-M", 0.326f, 6, 823.0f, 140.0f, 0.264f, 26.0f, 25.0f, 8.0f, 35.3f },
-    { ".300 Win Mag 190gr BTHP", 0.533f, 0, 884.0f, 190.0f, 0.308f, 24.0f, 30.0f, 10.0f, 34.0f }
+    { ".300 Win Mag 190gr BTHP", 0.533f, 0, 884.0f, 190.0f, 0.308f, 24.0f, 30.0f, 10.0f, 34.0f },
+    { "9mm 124gr FMJ (Pistol)", 0.150f, 0, 365.0f, 124.0f, 0.355f, 4.0f, 12.0f, 10.0f, 15.0f },
+    { "9mm 124gr FMJ (PDW)", 0.150f, 0, 410.0f, 124.0f, 0.355f, 8.0f, 12.0f, 10.0f, 15.0f }
 };
 const int kNumCartridgeProfiles = sizeof(kCartridgeProfiles) / sizeof(kCartridgeProfiles[0]);
 
