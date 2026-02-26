@@ -1,0 +1,8 @@
+# PlatformIO build artifacts
+.pio/
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+*.pyo
