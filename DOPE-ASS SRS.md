@@ -481,6 +481,10 @@ struct FiringSolution {
     float coriolis_windage_moa;
     float coriolis_elevation_moa;
     float spin_drift_moa;
+    float wind_only_windage_moa;
+    float earth_spin_windage_moa;
+    float offsets_windage_moa;
+    float cant_windage_moa;
 
     float cant_angle_deg;
     float heading_deg_true;

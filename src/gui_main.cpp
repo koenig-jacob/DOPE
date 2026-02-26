@@ -55,6 +55,7 @@ constexpr float YD_TO_M = 0.9144f;
 constexpr float MM_TO_IN = 0.0393700787f;
 constexpr float IN_TO_MM = 25.4f;
 constexpr float J_TO_FTLB = 0.737562149f;
+constexpr float MOA_TO_RAD = 0.000290888209f;
 constexpr uint64_t FRAME_STEP_US = 10000;
 constexpr int TARGET_RING_COUNT = 4;
 constexpr float TARGET_CANVAS_MIN = 160.0f;
@@ -74,9 +75,6 @@ struct CartridgeProfile {
     float muzzle_velocity_ms;
     float mass_grains;
     float caliber_inches;
-    float barrel_length_in;
-    float mv_adjustment_factor;
-    float twist_rate_inches;
     float length_mm;
 };
 
@@ -84,12 +82,11 @@ struct CartridgeProfile {
 // They are NOT consumed by the BCE engine internals and are only used to
 // pre-fill manual input fields for quick validation runs.
 const CartridgeProfile kCartridgeProfiles[] = {
-    { ".308 Win 175gr SMK", 0.505f, 0, 792.0f, 175.0f, 0.308f, 24.0f, 25.0f, 10.0f, 31.2f },
-    { ".223 Rem 55gr FMJ", 0.245f, 0, 990.0f, 55.0f, 0.223f, 20.0f, 25.0f, 12.0f, 19.0f },
-    { "6.5 Creedmoor 140gr ELD-M", 0.326f, 6, 823.0f, 140.0f, 0.264f, 26.0f, 25.0f, 8.0f, 35.3f },
-    { ".300 Win Mag 190gr BTHP", 0.533f, 0, 884.0f, 190.0f, 0.308f, 24.0f, 30.0f, 10.0f, 34.0f },
-    { "9mm 124gr FMJ (Pistol)", 0.150f, 0, 365.0f, 124.0f, 0.355f, 4.0f, 12.0f, 10.0f, 15.0f },
-    { "9mm 124gr FMJ (PDW)", 0.150f, 0, 410.0f, 124.0f, 0.355f, 8.0f, 12.0f, 10.0f, 15.0f }
+    { ".308 Win 175gr SMK", 0.505f, 0, 792.0f, 175.0f, 0.308f, 31.2f },
+    { ".223 Rem 55gr FMJ", 0.245f, 0, 990.0f, 55.0f, 0.223f, 19.0f },
+    { "6.5 Creedmoor 140gr ELD-M", 0.326f, 6, 823.0f, 140.0f, 0.264f, 35.3f },
+    { ".300 Win Mag 190gr BTHP", 0.533f, 0, 884.0f, 190.0f, 0.308f, 34.0f },
+    { "9mm 124gr FMJ", 0.150f, 0, 365.0f, 124.0f, 0.355f, 15.0f }
 };
 const int kNumCartridgeProfiles = sizeof(kCartridgeProfiles) / sizeof(kCartridgeProfiles[0]);
 
@@ -101,13 +98,11 @@ struct CartridgePreset {
     float mass_grains = 0.0f;
     float caliber_inches = 0.0f;
     float length_mm = 0.0f;
-    float barrel_length_in = 24.0f;
-    float mv_adjustment_factor = 25.0f;
-    float twist_rate_inches = 10.0f;
 };
 
-struct RiflePreset {
+struct GunPreset {
     std::string name;
+    float caliber_inches = 0.308f;
     float barrel_length_in = 24.0f;
     float mv_adjustment_factor = 25.0f;
     float twist_rate_inches = 10.0f;
@@ -144,23 +139,28 @@ struct GuiState {
     char preset_path[260] = "bce_gui_preset.json";
     char profile_library_path[260] = "bce_gui_profile_library.json";
     char new_cartridge_preset_name[64] = "";
-    char new_rifle_preset_name[64] = "";
+    char new_gun_preset_name[64] = "";
     int selected_cartridge_preset = -1;
-    int selected_rifle_preset = -1;
+    int selected_gun_preset = -1;
+    bool side_view_show_required_angle = false;
+    bool top_down_show_required_angle = false;
     std::string output_text;
     std::string last_action;
 };
 
 GuiState g_state;
 std::vector<CartridgePreset> g_cartridge_presets;
-std::vector<RiflePreset> g_rifle_presets;
+std::vector<GunPreset> g_gun_presets;
 
 using json = nlohmann::json;
 
 void SanitizeCartridgePreset(CartridgePreset& preset);
-void SanitizeRiflePreset(RiflePreset& preset);
+void SanitizeGunPreset(GunPreset& preset);
 json SerializeCartridgePreset(const CartridgePreset& input);
-json SerializeRiflePreset(const RiflePreset& input);
+json SerializeGunPreset(const GunPreset& input);
+float GetSelectedCartridgeCaliberInches();
+bool IsGunPresetCompatibleWithSelectedCaliber(const GunPreset& preset);
+void EnsureSelectedGunPresetMatchesCurrentCaliber();
 
 const DragModel kDragModels[8] = {
     DragModel::G1, DragModel::G2, DragModel::G3, DragModel::G4,
@@ -178,22 +178,43 @@ int FindCartridgePresetByName(const std::string& name) {
     return -1;
 }
 
-int FindRiflePresetByName(const std::string& name) {
-    for (size_t i = 0; i < g_rifle_presets.size(); ++i) {
-        if (g_rifle_presets[i].name == name) {
+int FindGunPresetByName(const std::string& name) {
+    for (size_t i = 0; i < g_gun_presets.size(); ++i) {
+        if (g_gun_presets[i].name == name) {
             return static_cast<int>(i);
         }
     }
     return -1;
 }
 
-const CartridgeProfile* FindBuiltInCartridgeProfileByName(const std::string& name) {
-    for (int i = 0; i < kNumCartridgeProfiles; ++i) {
-        if (name == kCartridgeProfiles[i].name) {
-            return &kCartridgeProfiles[i];
+float GetSelectedCartridgeCaliberInches() {
+    if (g_state.selected_cartridge_preset >= 0 &&
+        g_state.selected_cartridge_preset < static_cast<int>(g_cartridge_presets.size())) {
+        return g_cartridge_presets[g_state.selected_cartridge_preset].caliber_inches;
+    }
+    return g_state.bullet.caliber_inches;
+}
+
+bool IsGunPresetCompatibleWithSelectedCaliber(const GunPreset& preset) {
+    const float selected_caliber = std::fabs(GetSelectedCartridgeCaliberInches());
+    const float preset_caliber = std::fabs(preset.caliber_inches);
+    return std::fabs(selected_caliber - preset_caliber) <= 0.005f;
+}
+
+void EnsureSelectedGunPresetMatchesCurrentCaliber() {
+    if (g_state.selected_gun_preset >= 0 &&
+        g_state.selected_gun_preset < static_cast<int>(g_gun_presets.size()) &&
+        IsGunPresetCompatibleWithSelectedCaliber(g_gun_presets[g_state.selected_gun_preset])) {
+        return;
+    }
+
+    g_state.selected_gun_preset = -1;
+    for (int i = 0; i < static_cast<int>(g_gun_presets.size()); ++i) {
+        if (IsGunPresetCompatibleWithSelectedCaliber(g_gun_presets[i])) {
+            g_state.selected_gun_preset = i;
+            break;
         }
     }
-    return nullptr;
 }
 
 void EnsureProfileDefaults() {
@@ -210,38 +231,103 @@ void EnsureProfileDefaults() {
             p.mass_grains = src.mass_grains;
             p.caliber_inches = src.caliber_inches;
             p.length_mm = src.length_mm;
-            p.barrel_length_in = src.barrel_length_in;
-            p.mv_adjustment_factor = src.mv_adjustment_factor;
-            p.twist_rate_inches = src.twist_rate_inches;
             SanitizeCartridgePreset(p);
             g_cartridge_presets.push_back(p);
         }
     }
 
-    if (g_rifle_presets.empty()) {
-        RiflePreset base;
-        base.name = "Default Rifle";
-        base.barrel_length_in = 24.0f;
-        base.mv_adjustment_factor = 25.0f;
-        base.twist_rate_inches = 10.0f;
-        base.zero_range_m = 100.0f;
-        base.sight_height_mm = 38.1f;
-        SanitizeRiflePreset(base);
-        g_rifle_presets.push_back(base);
+    if (g_gun_presets.empty()) {
+        GunPreset gun_308;
+        gun_308.name = ".308 Default";
+        gun_308.caliber_inches = 0.308f;
+        gun_308.barrel_length_in = 24.0f;
+        gun_308.mv_adjustment_factor = 25.0f;
+        gun_308.twist_rate_inches = 10.0f;
+        gun_308.zero_range_m = 91.44f; // 100 yd
+        gun_308.sight_height_mm = 38.1f;
+        SanitizeGunPreset(gun_308);
+        g_gun_presets.push_back(gun_308);
+
+        GunPreset gun_223;
+        gun_223.name = ".223 Default";
+        gun_223.caliber_inches = 0.223f;
+        gun_223.barrel_length_in = 16.0f;
+        gun_223.mv_adjustment_factor = 25.0f;
+        gun_223.twist_rate_inches = 8.0f; // 1:8 requested
+        gun_223.zero_range_m = 91.44f; // 100 yd
+        gun_223.sight_height_mm = 38.1f;
+        SanitizeGunPreset(gun_223);
+        g_gun_presets.push_back(gun_223);
+
+        GunPreset gun_65;
+        gun_65.name = "6.5 CM Default";
+        gun_65.caliber_inches = 0.264f;
+        gun_65.barrel_length_in = 24.0f;
+        gun_65.mv_adjustment_factor = 25.0f;
+        gun_65.twist_rate_inches = 8.0f;
+        gun_65.zero_range_m = 91.44f; // 100 yd
+        gun_65.sight_height_mm = 38.1f;
+        SanitizeGunPreset(gun_65);
+        g_gun_presets.push_back(gun_65);
+
+        GunPreset gun_300;
+        gun_300.name = ".300 WM Default";
+        gun_300.caliber_inches = 0.308f;
+        gun_300.barrel_length_in = 24.0f;
+        gun_300.mv_adjustment_factor = 30.0f;
+        gun_300.twist_rate_inches = 10.0f;
+        gun_300.zero_range_m = 91.44f; // 100 yd
+        gun_300.sight_height_mm = 38.1f;
+        SanitizeGunPreset(gun_300);
+        g_gun_presets.push_back(gun_300);
+
+        GunPreset carbine_8;
+        carbine_8.name = "Carbine (8\")";
+        carbine_8.caliber_inches = 0.355f;
+        carbine_8.barrel_length_in = 8.0f;
+        carbine_8.mv_adjustment_factor = 12.0f;
+        carbine_8.twist_rate_inches = 10.0f;
+        carbine_8.zero_range_m = 45.72f; // 50 yd
+        carbine_8.sight_height_mm = 38.1f;
+        SanitizeGunPreset(carbine_8);
+        g_gun_presets.push_back(carbine_8);
+
+        GunPreset carbine_10_5;
+        carbine_10_5.name = "Carbine (10.5\")";
+        carbine_10_5.caliber_inches = 0.355f;
+        carbine_10_5.barrel_length_in = 10.5f;
+        carbine_10_5.mv_adjustment_factor = 15.0f;
+        carbine_10_5.twist_rate_inches = 10.0f;
+        carbine_10_5.zero_range_m = 45.72f; // 50 yd
+        carbine_10_5.sight_height_mm = 38.1f;
+        SanitizeGunPreset(carbine_10_5);
+        g_gun_presets.push_back(carbine_10_5);
+
+        GunPreset pdw;
+        pdw.name = "PDW";
+        pdw.caliber_inches = 0.355f;
+        pdw.barrel_length_in = (114.0f * MM_TO_IN);
+        pdw.mv_adjustment_factor = 14.0f;
+        pdw.twist_rate_inches = 10.0f;
+        pdw.zero_range_m = 45.72f; // 50 yd
+        pdw.sight_height_mm = 38.1f;
+        SanitizeGunPreset(pdw);
+        g_gun_presets.push_back(pdw);
+
     }
 
     for (auto& preset : g_cartridge_presets) {
         SanitizeCartridgePreset(preset);
     }
-    for (auto& preset : g_rifle_presets) {
-        SanitizeRiflePreset(preset);
+    for (auto& preset : g_gun_presets) {
+        SanitizeGunPreset(preset);
     }
 
     if (g_state.selected_cartridge_preset < 0 && !g_cartridge_presets.empty()) {
         g_state.selected_cartridge_preset = 0;
     }
-    if (g_state.selected_rifle_preset < 0 && !g_rifle_presets.empty()) {
-        g_state.selected_rifle_preset = 0;
+    if (g_state.selected_gun_preset < 0 && !g_gun_presets.empty()) {
+        g_state.selected_gun_preset = 0;
     }
 }
 
@@ -261,16 +347,14 @@ void SanitizeCartridgePreset(CartridgePreset& preset) {
     preset.mass_grains = ClampValue(preset.mass_grains, 20.0f, 1200.0f);
     preset.caliber_inches = ClampValue(std::fabs(preset.caliber_inches), 0.10f, 1.00f);
     preset.length_mm = ClampValue(preset.length_mm, 5.0f, 100.0f);
-    preset.barrel_length_in = ClampValue(preset.barrel_length_in, 8.0f, 40.0f);
-    preset.mv_adjustment_factor = ClampValue(std::fabs(preset.mv_adjustment_factor), 0.0f, 200.0f);
-    preset.twist_rate_inches = ClampValue(std::fabs(preset.twist_rate_inches), 1.0f, 30.0f);
 }
 
-void SanitizeRiflePreset(RiflePreset& preset) {
+void SanitizeGunPreset(GunPreset& preset) {
     if (preset.name.empty()) {
-        preset.name = "Unnamed Rifle";
+        preset.name = "Unnamed Gun";
     }
-    preset.barrel_length_in = ClampValue(preset.barrel_length_in, 8.0f, 40.0f);
+    preset.caliber_inches = ClampValue(std::fabs(preset.caliber_inches), 0.10f, 1.00f);
+    preset.barrel_length_in = ClampValue(preset.barrel_length_in, 2.0f, 40.0f);
     preset.mv_adjustment_factor = ClampValue(std::fabs(preset.mv_adjustment_factor), 0.0f, 200.0f);
     preset.twist_rate_inches = ClampValue(std::fabs(preset.twist_rate_inches), 1.0f, 30.0f);
     preset.zero_range_m = ClampValue(preset.zero_range_m, 10.0f, 2500.0f);
@@ -289,18 +373,16 @@ json SerializeCartridgePreset(const CartridgePreset& input) {
     item["mass_grains"] = preset.mass_grains;
     item["caliber_inches"] = preset.caliber_inches;
     item["length_mm"] = preset.length_mm;
-    item["barrel_length_in"] = preset.barrel_length_in;
-    item["mv_adjustment_factor"] = preset.mv_adjustment_factor;
-    item["twist_rate_inches"] = preset.twist_rate_inches;
     return item;
 }
 
-json SerializeRiflePreset(const RiflePreset& input) {
-    RiflePreset preset = input;
-    SanitizeRiflePreset(preset);
+json SerializeGunPreset(const GunPreset& input) {
+    GunPreset preset = input;
+    SanitizeGunPreset(preset);
 
     json item;
     item["name"] = preset.name;
+    item["caliber_inches"] = preset.caliber_inches;
     item["barrel_length_in"] = preset.barrel_length_in;
     item["mv_adjustment_factor"] = preset.mv_adjustment_factor;
     item["twist_rate_inches"] = preset.twist_rate_inches;
@@ -479,12 +561,12 @@ void ResetStateDefaults() {
     std::snprintf(g_state.preset_path, sizeof(g_state.preset_path), "%s", "bce_gui_preset.json");
     std::snprintf(g_state.profile_library_path, sizeof(g_state.profile_library_path), "%s", "bce_gui_profile_library.json");
     std::snprintf(g_state.new_cartridge_preset_name, sizeof(g_state.new_cartridge_preset_name), "%s", "New Cartridge Preset");
-    std::snprintf(g_state.new_rifle_preset_name, sizeof(g_state.new_rifle_preset_name), "%s", "New Rifle Preset");
+    std::snprintf(g_state.new_gun_preset_name, sizeof(g_state.new_gun_preset_name), "%s", "New Gun Preset");
     g_state.selected_cartridge_preset = -1;
-    g_state.selected_rifle_preset = -1;
+    g_state.selected_gun_preset = -1;
 
     g_cartridge_presets.clear();
-    g_rifle_presets.clear();
+    g_gun_presets.clear();
     EnsureProfileDefaults();
 }
 
@@ -632,6 +714,11 @@ void RefreshOutput() {
     const float range_yd = sol.range_m * M_TO_YD;
     const float horiz_range_yd = sol.horizontal_range_m * M_TO_YD;
     const float energy_ftlb = sol.energy_at_target_j * J_TO_FTLB;
+    auto direction_label = [](float moa) -> const char* {
+        if (moa > 0.01f) return "RIGHT";
+        if (moa < -0.01f) return "LEFT";
+        return "CENTER";
+    };
 
     if (g_state.unit_system == UnitSystem::IMPERIAL) {
         ss << "Drag Coefficient (G-model): " << g_state.bullet.bc;
@@ -663,6 +750,14 @@ void RefreshOutput() {
     ss << "Cant angle (deg): " << sol.cant_angle_deg << "\n";
     ss << "Coriolis elev/wind (MOA): " << sol.coriolis_elevation_moa << " / " << sol.coriolis_windage_moa << "\n";
     ss << "Spin drift (MOA): " << sol.spin_drift_moa << "\n";
+    ss << "Windage Breakdown (MOA, + = right hold):\n";
+     ss << "  Wind only:        " << sol.wind_only_windage_moa << " [" << direction_label(sol.wind_only_windage_moa) << "]\n";
+    ss << "  Earth spin total: " << sol.earth_spin_windage_moa
+       << " (Coriolis " << sol.coriolis_windage_moa
+         << ", Spin " << sol.spin_drift_moa << ") [" << direction_label(sol.earth_spin_windage_moa) << "]\n";
+     ss << "  Offsets total:    " << sol.offsets_windage_moa << " [" << direction_label(sol.offsets_windage_moa) << "]\n";
+     ss << "  Cant added:       " << sol.cant_windage_moa << " [" << direction_label(sol.cant_windage_moa) << "]\n";
+     ss << "  Total windage:    " << sol.hold_windage_moa << " [" << direction_label(sol.hold_windage_moa) << "]\n";
 
     g_state.output_text = ss.str();
 }
@@ -679,16 +774,14 @@ void ApplyCartridgePreset(const CartridgePreset& preset) {
     g_state.bullet.mass_grains = normalized.mass_grains;
     g_state.bullet.caliber_inches = normalized.caliber_inches;
     g_state.bullet.length_mm = normalized.length_mm;
-    g_state.bullet.barrel_length_in = normalized.barrel_length_in;
-    g_state.bullet.mv_adjustment_factor = normalized.mv_adjustment_factor;
-    g_state.bullet.twist_rate_inches = normalized.twist_rate_inches;
     g_state.override_drag_coefficient = true;
     g_state.manual_drag_coefficient = normalized.bc;
+    EnsureSelectedGunPresetMatchesCurrentCaliber();
 }
 
-void ApplyRiflePreset(const RiflePreset& preset) {
-    RiflePreset normalized = preset;
-    SanitizeRiflePreset(normalized);
+void ApplyGunPreset(const GunPreset& preset) {
+    GunPreset normalized = preset;
+    SanitizeGunPreset(normalized);
 
     g_state.bullet.barrel_length_in = normalized.barrel_length_in;
     g_state.bullet.mv_adjustment_factor = normalized.mv_adjustment_factor;
@@ -708,22 +801,20 @@ CartridgePreset CaptureCurrentCartridgePreset(const std::string& name) {
     preset.mass_grains = g_state.bullet.mass_grains;
     preset.caliber_inches = g_state.bullet.caliber_inches;
     preset.length_mm = g_state.bullet.length_mm;
-    preset.barrel_length_in = g_state.bullet.barrel_length_in;
-    preset.mv_adjustment_factor = g_state.bullet.mv_adjustment_factor;
-    preset.twist_rate_inches = g_state.bullet.twist_rate_inches;
     SanitizeCartridgePreset(preset);
     return preset;
 }
 
-RiflePreset CaptureCurrentRiflePreset(const std::string& name) {
-    RiflePreset preset;
+GunPreset CaptureCurrentGunPreset(const std::string& name) {
+    GunPreset preset;
     preset.name = name;
+    preset.caliber_inches = g_state.bullet.caliber_inches;
     preset.barrel_length_in = g_state.bullet.barrel_length_in;
     preset.mv_adjustment_factor = g_state.bullet.mv_adjustment_factor;
     preset.twist_rate_inches = g_state.bullet.twist_rate_inches;
     preset.zero_range_m = g_state.zero.zero_range_m;
     preset.sight_height_mm = g_state.zero.sight_height_mm;
-    SanitizeRiflePreset(preset);
+    SanitizeGunPreset(preset);
     return preset;
 }
 
@@ -732,14 +823,14 @@ void SaveProfileLibrary() {
 
     json root;
     root["cartridge_presets"] = json::array();
-    root["rifle_presets"] = json::array();
+    root["gun_presets"] = json::array();
 
     for (const auto& preset : g_cartridge_presets) {
         root["cartridge_presets"].push_back(SerializeCartridgePreset(preset));
     }
 
-    for (const auto& preset : g_rifle_presets) {
-        root["rifle_presets"].push_back(SerializeRiflePreset(preset));
+    for (const auto& preset : g_gun_presets) {
+        root["gun_presets"].push_back(SerializeGunPreset(preset));
     }
 
     std::ofstream out(g_state.profile_library_path, std::ios::binary | std::ios::trunc);
@@ -767,8 +858,7 @@ void LoadProfileLibrary() {
         // Load into temporary containers first; only commit once parsing and
         // sanitization succeed to avoid partially-applied profile libraries.
         std::vector<CartridgePreset> loaded_cartridge;
-        std::vector<RiflePreset> loaded_rifle;
-        bool used_legacy_defaults = false;
+        std::vector<GunPreset> loaded_gun;
 
         if (root.contains("cartridge_presets") && root["cartridge_presets"].is_array()) {
             for (const auto& item : root["cartridge_presets"]) {
@@ -786,37 +876,42 @@ void LoadProfileLibrary() {
                 preset.mass_grains = item.value("mass_grains", 175.0f);
                 preset.caliber_inches = item.value("caliber_inches", 0.308f);
                 preset.length_mm = item.value("length_mm", 31.2f);
-                const CartridgeProfile* built_in = FindBuiltInCartridgeProfileByName(preset.name);
-                const float fallback_barrel = built_in ? built_in->barrel_length_in : 24.0f;
-                const float fallback_mv_adjust = built_in ? built_in->mv_adjustment_factor : 25.0f;
-                const float fallback_twist = built_in ? built_in->twist_rate_inches : 10.0f;
-                // Legacy profile files predate barrel/twist/MV-adjust fields.
-                // Fall back to matching built-in cartridge characteristics.
-                if (!item.contains("barrel_length_in") || !item.contains("mv_adjustment_factor") || !item.contains("twist_rate_inches")) {
-                    used_legacy_defaults = true;
-                }
-                preset.barrel_length_in = item.value("barrel_length_in", fallback_barrel);
-                preset.mv_adjustment_factor = std::fabs(item.value("mv_adjustment_factor", fallback_mv_adjust));
-                preset.twist_rate_inches = item.value("twist_rate_inches", fallback_twist);
                 SanitizeCartridgePreset(preset);
                 loaded_cartridge.push_back(preset);
             }
         }
 
-        if (root.contains("rifle_presets") && root["rifle_presets"].is_array()) {
-            for (const auto& item : root["rifle_presets"]) {
+        if (root.contains("gun_presets") && root["gun_presets"].is_array()) {
+            for (const auto& item : root["gun_presets"]) {
                 if (!item.contains("name") || !item["name"].is_string()) {
                     continue;
                 }
-                RiflePreset preset;
+                GunPreset preset;
                 preset.name = item["name"].get<std::string>();
+                preset.caliber_inches = item.value("caliber_inches", 0.308f);
                 preset.barrel_length_in = item.value("barrel_length_in", 24.0f);
                 preset.mv_adjustment_factor = std::fabs(item.value("mv_adjustment_factor", 25.0f));
                 preset.twist_rate_inches = item.value("twist_rate_inches", 10.0f);
                 preset.zero_range_m = item.value("zero_range_m", 100.0f);
                 preset.sight_height_mm = item.value("sight_height_mm", 38.1f);
-                SanitizeRiflePreset(preset);
-                loaded_rifle.push_back(preset);
+                SanitizeGunPreset(preset);
+                loaded_gun.push_back(preset);
+            }
+        } else if (root.contains("rifle_presets") && root["rifle_presets"].is_array()) {
+            for (const auto& item : root["rifle_presets"]) {
+                if (!item.contains("name") || !item["name"].is_string()) {
+                    continue;
+                }
+                GunPreset preset;
+                preset.name = item["name"].get<std::string>();
+                preset.caliber_inches = GetSelectedCartridgeCaliberInches();
+                preset.barrel_length_in = item.value("barrel_length_in", 24.0f);
+                preset.mv_adjustment_factor = std::fabs(item.value("mv_adjustment_factor", 25.0f));
+                preset.twist_rate_inches = item.value("twist_rate_inches", 10.0f);
+                preset.zero_range_m = item.value("zero_range_m", 100.0f);
+                preset.sight_height_mm = item.value("sight_height_mm", 38.1f);
+                SanitizeGunPreset(preset);
+                loaded_gun.push_back(preset);
             }
         }
 
@@ -824,15 +919,14 @@ void LoadProfileLibrary() {
             g_cartridge_presets = loaded_cartridge;
             g_state.selected_cartridge_preset = 0;
         }
-        if (!loaded_rifle.empty()) {
-            g_rifle_presets = loaded_rifle;
-            g_state.selected_rifle_preset = 0;
+        if (!loaded_gun.empty()) {
+            g_gun_presets = loaded_gun;
+            g_state.selected_gun_preset = 0;
         }
 
         EnsureProfileDefaults();
-        g_state.last_action = used_legacy_defaults
-            ? "Load Profile Library (legacy fields upgraded)"
-            : "Load Profile Library";
+        EnsureSelectedGunPresetMatchesCurrentCaliber();
+        g_state.last_action = "Load Profile Library";
     } catch (const json::parse_error& e) {
         g_state.last_action = "Load Profile Library (failed)";
         std::string error_msg = "Profile library load failed: JSON parse error: ";
@@ -1147,52 +1241,58 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
             }
         }
 
-        if (ImGui::CollapsingHeader("Rifle Presets (GUI-only)")) {
-            ImGui::InputText("Rifle Preset Name", g_state.new_rifle_preset_name, IM_ARRAYSIZE(g_state.new_rifle_preset_name));
-            if (ImGui::Button("Add/Update Rifle Preset")) {
-                const std::string preset_name = g_state.new_rifle_preset_name;
+        if (ImGui::CollapsingHeader("Gun Presets (GUI-only)")) {
+            EnsureSelectedGunPresetMatchesCurrentCaliber();
+            ImGui::InputText("Gun Preset Name", g_state.new_gun_preset_name, IM_ARRAYSIZE(g_state.new_gun_preset_name));
+            if (ImGui::Button("Add/Update Gun Preset")) {
+                const std::string preset_name = g_state.new_gun_preset_name;
                 if (!preset_name.empty()) {
-                    RiflePreset preset = CaptureCurrentRiflePreset(preset_name);
-                    const int existing = FindRiflePresetByName(preset_name);
+                    GunPreset preset = CaptureCurrentGunPreset(preset_name);
+                    const int existing = FindGunPresetByName(preset_name);
                     if (existing >= 0) {
-                        g_rifle_presets[existing] = preset;
-                        g_state.selected_rifle_preset = existing;
+                        g_gun_presets[existing] = preset;
+                        g_state.selected_gun_preset = existing;
                     } else {
-                        g_rifle_presets.push_back(preset);
-                        g_state.selected_rifle_preset = static_cast<int>(g_rifle_presets.size()) - 1;
+                        g_gun_presets.push_back(preset);
+                        g_state.selected_gun_preset = static_cast<int>(g_gun_presets.size()) - 1;
                     }
-                    g_state.last_action = "Rifle Preset Saved";
+                    g_state.last_action = "Gun Preset Saved";
                     RefreshOutput();
                 }
             }
             ImGui::SameLine();
-            if (ImGui::Button("Apply Selected Rifle") &&
-                g_state.selected_rifle_preset >= 0 &&
-                g_state.selected_rifle_preset < static_cast<int>(g_rifle_presets.size())) {
-                ApplyRiflePreset(g_rifle_presets[g_state.selected_rifle_preset]);
-                g_state.last_action = "Rifle Preset Applied";
+            if (ImGui::Button("Apply Selected Gun") &&
+                g_state.selected_gun_preset >= 0 &&
+                g_state.selected_gun_preset < static_cast<int>(g_gun_presets.size()) &&
+                IsGunPresetCompatibleWithSelectedCaliber(g_gun_presets[g_state.selected_gun_preset])) {
+                ApplyGunPreset(g_gun_presets[g_state.selected_gun_preset]);
+                g_state.last_action = "Gun Preset Applied";
                 ApplyConfig();
                 RefreshOutput();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Remove Selected Rifle") &&
-                g_state.selected_rifle_preset >= 0 &&
-                g_state.selected_rifle_preset < static_cast<int>(g_rifle_presets.size())) {
-                g_rifle_presets.erase(g_rifle_presets.begin() + g_state.selected_rifle_preset);
-                if (g_rifle_presets.empty()) {
-                    g_state.selected_rifle_preset = -1;
-                } else if (g_state.selected_rifle_preset >= static_cast<int>(g_rifle_presets.size())) {
-                    g_state.selected_rifle_preset = static_cast<int>(g_rifle_presets.size()) - 1;
+            if (ImGui::Button("Remove Selected Gun") &&
+                g_state.selected_gun_preset >= 0 &&
+                g_state.selected_gun_preset < static_cast<int>(g_gun_presets.size()) &&
+                IsGunPresetCompatibleWithSelectedCaliber(g_gun_presets[g_state.selected_gun_preset])) {
+                g_gun_presets.erase(g_gun_presets.begin() + g_state.selected_gun_preset);
+                if (g_gun_presets.empty()) {
+                    g_state.selected_gun_preset = -1;
+                } else if (g_state.selected_gun_preset >= static_cast<int>(g_gun_presets.size())) {
+                    g_state.selected_gun_preset = static_cast<int>(g_gun_presets.size()) - 1;
                 }
-                g_state.last_action = "Rifle Preset Removed";
+                g_state.last_action = "Gun Preset Removed";
                 RefreshOutput();
             }
 
-            if (ImGui::BeginListBox("##rifle_presets", ImVec2(-FLT_MIN, 110.0f))) {
-                for (int i = 0; i < static_cast<int>(g_rifle_presets.size()); ++i) {
-                    const bool is_selected = (g_state.selected_rifle_preset == i);
-                    if (ImGui::Selectable(g_rifle_presets[i].name.c_str(), is_selected)) {
-                        g_state.selected_rifle_preset = i;
+            if (ImGui::BeginListBox("##gun_presets", ImVec2(-FLT_MIN, 110.0f))) {
+                for (int i = 0; i < static_cast<int>(g_gun_presets.size()); ++i) {
+                    if (!IsGunPresetCompatibleWithSelectedCaliber(g_gun_presets[i])) {
+                        continue;
+                    }
+                    const bool is_selected = (g_state.selected_gun_preset == i);
+                    if (ImGui::Selectable(g_gun_presets[i].name.c_str(), is_selected)) {
+                        g_state.selected_gun_preset = i;
                     }
                     if (is_selected) {
                         ImGui::SetItemDefaultFocus();
@@ -1368,9 +1468,36 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
         const float elev_offset_in = hold_elevation_moa * inches_per_moa;
         const float wind_offset_in = hold_windage_moa * inches_per_moa;
         const float confidence_radius_in = confidence_radius_moa * inches_per_moa;
+        const float wind_only_in = sol.wind_only_windage_moa * inches_per_moa;
+        const float earth_spin_in = sol.earth_spin_windage_moa * inches_per_moa;
+        const float offsets_in = sol.offsets_windage_moa * inches_per_moa;
+        const float cant_added_in = sol.cant_windage_moa * inches_per_moa;
+        auto direction_label = [](float moa) -> const char* {
+            if (moa > 0.01f) return "RIGHT";
+            if (moa < -0.01f) return "LEFT";
+            return "CENTER";
+        };
+        auto direction_color = [](float moa) -> ImVec4 {
+            if (moa > 0.01f) return ImGui::GetStyleColorVec4(ImGuiCol_PlotHistogram);
+            if (moa < -0.01f) return ImGui::GetStyleColorVec4(ImGuiCol_PlotLines);
+            return ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+        };
 
         ImGui::Text("Scale: %.0f MOA/ring (%.2f in/ring @ %.1f yd)", moa_per_ring, inches_per_ring, display_range_yd);
         ImGui::Text("Offset: Elev %.2f MOA (%.2f in), Wind %.2f MOA (%.2f in)", hold_elevation_moa, elev_offset_in, hold_windage_moa, wind_offset_in);
+        ImGui::Text("Wind breakdown:");
+        ImGui::Text("  Wind:       %.2f MOA (%.2f in)", sol.wind_only_windage_moa, wind_only_in);
+        ImGui::SameLine();
+        ImGui::TextColored(direction_color(sol.wind_only_windage_moa), "[%s]", direction_label(sol.wind_only_windage_moa));
+        ImGui::Text("  Earth spin: %.2f MOA (%.2f in)", sol.earth_spin_windage_moa, earth_spin_in);
+        ImGui::SameLine();
+        ImGui::TextColored(direction_color(sol.earth_spin_windage_moa), "[%s]", direction_label(sol.earth_spin_windage_moa));
+        ImGui::Text("  Offsets:    %.2f MOA (%.2f in)", sol.offsets_windage_moa, offsets_in);
+        ImGui::SameLine();
+        ImGui::TextColored(direction_color(sol.offsets_windage_moa), "[%s]", direction_label(sol.offsets_windage_moa));
+        ImGui::Text("  Cant:       %.2f MOA (%.2f in)", sol.cant_windage_moa, cant_added_in);
+        ImGui::SameLine();
+        ImGui::TextColored(direction_color(sol.cant_windage_moa), "[%s]", direction_label(sol.cant_windage_moa));
         ImGui::Text("Center->Impact: %.2f MOA (%.2f in)", impact_distance_moa, impact_distance_in);
         ImGui::Text("Confidence Radius: %.2f MOA (%.2f in)", confidence_radius_moa, confidence_radius_in);
         ImGui::Separator();
@@ -1426,6 +1553,308 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
 
         draw_list->AddCircle(impact_point, confidence_radius_px, IM_COL32(255, 220, 64, 220), 0, 1.5f);
         draw_list->AddCircleFilled(impact_point, 4.0f, IM_COL32(255, 70, 70, 255));
+
+        ImGui::End();
+
+        ImGui::Begin("Side View Arc");
+        ImDrawList* side_draw_list = ImGui::GetWindowDrawList();
+
+        FiringSolution side_sol = {};
+        BCE_GetSolution(&side_sol);
+
+        float side_range_m = side_sol.horizontal_range_m;
+        if (side_range_m <= 0.0f) {
+            side_range_m = (side_sol.range_m > 0.0f) ? side_sol.range_m : g_state.lrf_range;
+        }
+        side_range_m = ClampValue(side_range_m, 1.0f, 5000.0f);
+
+        auto nice_ceil = [](float value) -> float {
+            if (value <= 0.0f) {
+                return 1.0f;
+            }
+            const float exponent = std::floor(std::log10(value));
+            const float base = std::pow(10.0f, exponent);
+            const float normalized = value / base;
+            float snapped = 1.0f;
+            if (normalized <= 1.0f) {
+                snapped = 1.0f;
+            } else if (normalized <= 2.0f) {
+                snapped = 2.0f;
+            } else if (normalized <= 5.0f) {
+                snapped = 5.0f;
+            } else {
+                snapped = 10.0f;
+            }
+            return snapped * base;
+        };
+
+        const float range_m_to_display = is_imperial ? M_TO_YD : 1.0f;
+        const float range_display_to_m = is_imperial ? YD_TO_M : 1.0f;
+        const float offset_m_to_display = is_imperial ? 39.3700787f : 100.0f;
+        const float offset_display_to_m = is_imperial ? IN_TO_MM / 1000.0f : 0.01f;
+
+        const float drop_m = std::fabs(side_sol.hold_elevation_moa) * MOA_TO_RAD * side_range_m;
+        const float side_range_display = side_range_m * range_m_to_display;
+        const float side_range_scale_display = ClampValue(nice_ceil(side_range_display * 1.15f), 10.0f, is_imperial ? 6000.0f : 5000.0f);
+        const float side_range_step_display = side_range_scale_display / 5.0f;
+        const float side_range_scale_m = side_range_scale_display * range_display_to_m;
+        const float side_range_step_m = side_range_step_display * range_display_to_m;
+        const float drop_display = drop_m * offset_m_to_display;
+        const float side_drop_scale_display = ClampValue(nice_ceil((drop_display * 1.20f) + 0.1f), 1.0f, is_imperial ? 8000.0f : 20000.0f);
+        const float side_drop_scale_m = side_drop_scale_display * offset_display_to_m;
+        const char* drop_units = is_imperial ? "in" : "cm";
+        const float range_display = side_range_display;
+        const char* range_units = is_imperial ? "yd" : "m";
+        const float range_scale_display = side_range_scale_display;
+        const float range_step_display = side_range_step_display;
+        const float drop_scale_display = side_drop_scale_display;
+        const float elevation_angle_rad = side_sol.hold_elevation_moa * MOA_TO_RAD;
+        const float elevation_angle_deg = side_sol.hold_elevation_moa / 60.0f;
+
+        if (ImGui::Button(g_state.side_view_show_required_angle ? "Show Bullet Path" : "Show Required Elevation Angle")) {
+            g_state.side_view_show_required_angle = !g_state.side_view_show_required_angle;
+        }
+
+        ImGui::Text("Range: %.1f %s", range_display, range_units);
+        ImGui::Text("Estimated drop at target: %.2f %s", drop_display, drop_units);
+        ImGui::Text("Graph scale: 0..%.0f %s (step %.0f), vertical +/-%.1f %s", range_scale_display, range_units, range_step_display, drop_scale_display, drop_units);
+        ImGui::Text("Required elevation angle: %.3f deg", elevation_angle_deg);
+        ImGui::Separator();
+
+        ImVec2 side_avail = ImGui::GetContentRegionAvail();
+        float side_canvas_w = side_avail.x;
+        if (side_canvas_w < 260.0f) side_canvas_w = 260.0f;
+        if (side_canvas_w > 900.0f) side_canvas_w = 900.0f;
+        float side_canvas_h = side_avail.y;
+        if (side_canvas_h < 180.0f) side_canvas_h = 180.0f;
+        if (side_canvas_h > 320.0f) side_canvas_h = 320.0f;
+
+        const ImVec2 side_canvas_size(side_canvas_w, side_canvas_h);
+        const ImVec2 side_canvas_pos = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##side_view_arc_canvas", side_canvas_size);
+        const ImVec2 side_canvas_end(side_canvas_pos.x + side_canvas_size.x, side_canvas_pos.y + side_canvas_size.y);
+
+        side_draw_list->AddRectFilled(side_canvas_pos, side_canvas_end, IM_COL32(24, 24, 28, 255));
+        side_draw_list->AddRect(side_canvas_pos, side_canvas_end, IM_COL32(80, 80, 90, 255));
+
+        const float left_margin = 28.0f;
+        const float right_margin = 20.0f;
+        const float top_margin = 20.0f;
+        const float bottom_margin = 24.0f;
+        const float plot_left = side_canvas_pos.x + left_margin;
+        const float plot_right = side_canvas_end.x - right_margin;
+        const float plot_top = side_canvas_pos.y + top_margin;
+        const float plot_bottom = side_canvas_end.y - bottom_margin;
+        const float plot_width = plot_right - plot_left;
+        const float plot_height = plot_bottom - plot_top;
+
+        const float y_min_m = -side_drop_scale_m;
+        const float y_max_m = side_drop_scale_m;
+        const float y_span_m = (y_max_m - y_min_m > 0.01f) ? (y_max_m - y_min_m) : 0.01f;
+
+        auto map_x = [&](float x_m) -> float {
+            return plot_left + (x_m / side_range_scale_m) * plot_width;
+        };
+        auto map_y = [&](float y_m) -> float {
+            const float t = (y_max_m - y_m) / y_span_m;
+            return plot_top + t * plot_height;
+        };
+
+        for (int i = 0; i <= 5; ++i) {
+            const float grid_x_m = side_range_step_m * static_cast<float>(i);
+            const float gx = map_x(grid_x_m);
+            side_draw_list->AddLine(ImVec2(gx, plot_top), ImVec2(gx, plot_bottom), IM_COL32(60, 60, 70, 150), 1.0f);
+
+            char tick_label[32];
+            const float tick_display = is_imperial ? (grid_x_m * M_TO_YD) : grid_x_m;
+            std::snprintf(tick_label, sizeof(tick_label), "%.0f", tick_display);
+            side_draw_list->AddText(ImVec2(gx - 8.0f, plot_bottom + 3.0f), IM_COL32(180, 180, 190, 255), tick_label);
+        }
+
+        const float los_y = map_y(0.0f);
+        side_draw_list->AddLine(ImVec2(plot_left, los_y), ImVec2(plot_right, los_y), IM_COL32(170, 170, 180, 220), 1.0f);
+        side_draw_list->AddLine(ImVec2(plot_left, plot_top), ImVec2(plot_left, plot_bottom), IM_COL32(120, 120, 130, 180), 1.0f);
+
+        const float half_drop_m = -side_drop_scale_m * 0.5f;
+        const float half_drop_y = map_y(half_drop_m);
+        side_draw_list->AddLine(ImVec2(plot_left, half_drop_y), ImVec2(plot_right, half_drop_y), IM_COL32(70, 70, 80, 140), 1.0f);
+
+        const float half_rise_m = side_drop_scale_m * 0.5f;
+        const float half_rise_y = map_y(half_rise_m);
+        side_draw_list->AddLine(ImVec2(plot_left, half_rise_y), ImVec2(plot_right, half_rise_y), IM_COL32(70, 70, 80, 140), 1.0f);
+
+        const int sample_count = 64;
+        ImVec2 arc_points[sample_count + 1];
+        if (!g_state.side_view_show_required_angle) {
+            const float tan_theta = std::tanf(elevation_angle_rad);
+            for (int i = 0; i <= sample_count; ++i) {
+                const float t = static_cast<float>(i) / static_cast<float>(sample_count);
+                const float x_m = t * side_range_m;
+                const float y_m = (tan_theta * x_m) - ((tan_theta / side_range_m) * x_m * x_m);
+                arc_points[i] = ImVec2(map_x(x_m), map_y(y_m));
+            }
+            side_draw_list->AddPolyline(arc_points, sample_count + 1, IM_COL32(98, 203, 255, 255), ImDrawFlags_None, 2.0f);
+        } else {
+            const ImVec2 aim_start(map_x(0.0f), map_y(0.0f));
+            const ImVec2 aim_end(map_x(side_range_m), map_y(drop_m));
+            side_draw_list->AddLine(aim_start, aim_end, IM_COL32(255, 190, 90, 255), 2.0f);
+        }
+
+        const ImVec2 muzzle_pt(map_x(0.0f), map_y(0.0f));
+        const ImVec2 impact_pt = g_state.side_view_show_required_angle
+            ? ImVec2(map_x(side_range_m), map_y(drop_m))
+            : ImVec2(map_x(side_range_m), map_y(0.0f));
+        side_draw_list->AddCircleFilled(muzzle_pt, 3.5f, IM_COL32(130, 255, 130, 255));
+        side_draw_list->AddCircleFilled(impact_pt, 4.0f, IM_COL32(255, 90, 90, 255));
+        side_draw_list->AddText(ImVec2(muzzle_pt.x + 6.0f, muzzle_pt.y - 16.0f), IM_COL32(200, 230, 200, 255), "Muzzle");
+        side_draw_list->AddText(ImVec2(impact_pt.x - 56.0f, impact_pt.y - 16.0f), IM_COL32(230, 200, 200, 255), g_state.side_view_show_required_angle ? "Aim Point" : "Impact");
+
+        side_draw_list->AddText(ImVec2(plot_right - 90.0f, plot_bottom + 4.0f), IM_COL32(190, 190, 200, 255), range_units);
+
+        char los_label[64];
+        std::snprintf(los_label, sizeof(los_label), "Line of sight (0 %s)", drop_units);
+        side_draw_list->AddText(ImVec2(plot_left + 4.0f, los_y - 16.0f), IM_COL32(170, 190, 220, 255), los_label);
+
+        char drop_label[64];
+        std::snprintf(drop_label, sizeof(drop_label), "Drop @ target: %.2f %s", drop_display, drop_units);
+        side_draw_list->AddText(ImVec2(plot_left + 4.0f, plot_top + 2.0f), IM_COL32(190, 190, 200, 255), drop_label);
+
+        char half_drop_label[64];
+        const float half_drop_display = (-half_drop_m) * offset_m_to_display;
+        std::snprintf(half_drop_label, sizeof(half_drop_label), "-%.1f %s", half_drop_display, drop_units);
+        side_draw_list->AddText(ImVec2(plot_left + 4.0f, half_drop_y - 14.0f), IM_COL32(150, 150, 165, 255), half_drop_label);
+
+        char half_rise_label[64];
+        const float half_rise_display = half_rise_m * offset_m_to_display;
+        std::snprintf(half_rise_label, sizeof(half_rise_label), "+%.1f %s", half_rise_display, drop_units);
+        side_draw_list->AddText(ImVec2(plot_left + 4.0f, half_rise_y - 14.0f), IM_COL32(150, 150, 165, 255), half_rise_label);
+
+        ImGui::End();
+
+        ImGui::Begin("Top Down Drift");
+        ImDrawList* drift_draw_list = ImGui::GetWindowDrawList();
+
+        FiringSolution drift_sol = {};
+        BCE_GetSolution(&drift_sol);
+
+        float drift_range_m = drift_sol.horizontal_range_m;
+        if (drift_range_m <= 0.0f) {
+            drift_range_m = (drift_sol.range_m > 0.0f) ? drift_sol.range_m : g_state.lrf_range;
+        }
+        drift_range_m = ClampValue(drift_range_m, 1.0f, 5000.0f);
+
+        const float lateral_m = drift_sol.hold_windage_moa * MOA_TO_RAD * drift_range_m;
+        const float drift_range_display = drift_range_m * range_m_to_display;
+        const float drift_range_scale_display = ClampValue(nice_ceil(drift_range_display * 1.15f), 10.0f, is_imperial ? 6000.0f : 5000.0f);
+        const float drift_range_step_display = drift_range_scale_display / 5.0f;
+        const float drift_range_scale_m = drift_range_scale_display * range_display_to_m;
+        const float drift_range_step_m = drift_range_step_display * range_display_to_m;
+
+        const float drift_display = lateral_m * offset_m_to_display;
+        const float drift_scale_display = ClampValue(nice_ceil((std::fabs(drift_display) * 1.25f) + 0.1f), 1.0f, is_imperial ? 6000.0f : 20000.0f);
+        const float drift_lateral_scale_m = drift_scale_display * offset_display_to_m;
+        const float windage_angle_deg = drift_sol.hold_windage_moa / 60.0f;
+        const char* drift_units = is_imperial ? "in" : "cm";
+        const char* drift_direction = (drift_display > 0.01f) ? "RIGHT" : ((drift_display < -0.01f) ? "LEFT" : "CENTER");
+
+        if (ImGui::Button(g_state.top_down_show_required_angle ? "Show Bullet Path" : "Show Required Windage Angle")) {
+            g_state.top_down_show_required_angle = !g_state.top_down_show_required_angle;
+        }
+
+        ImGui::Text("Total side drift: %.2f %s [%s]", std::fabs(drift_display), drift_units, drift_direction);
+        ImGui::Text("Graph scale: 0..%.0f %s range, +/-%.1f %s lateral", drift_range_scale_display, range_units, drift_scale_display, drift_units);
+        ImGui::Text("Required windage angle: %.3f deg", windage_angle_deg);
+        ImGui::Separator();
+
+        ImVec2 drift_avail = ImGui::GetContentRegionAvail();
+        float drift_canvas_w = drift_avail.x;
+        if (drift_canvas_w < 260.0f) drift_canvas_w = 260.0f;
+        if (drift_canvas_w > 900.0f) drift_canvas_w = 900.0f;
+        float drift_canvas_h = drift_avail.y;
+        if (drift_canvas_h < 180.0f) drift_canvas_h = 180.0f;
+        if (drift_canvas_h > 320.0f) drift_canvas_h = 320.0f;
+
+        const ImVec2 drift_canvas_size(drift_canvas_w, drift_canvas_h);
+        const ImVec2 drift_canvas_pos = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##top_down_drift_canvas", drift_canvas_size);
+        const ImVec2 drift_canvas_end(drift_canvas_pos.x + drift_canvas_size.x, drift_canvas_pos.y + drift_canvas_size.y);
+
+        drift_draw_list->AddRectFilled(drift_canvas_pos, drift_canvas_end, IM_COL32(24, 24, 28, 255));
+        drift_draw_list->AddRect(drift_canvas_pos, drift_canvas_end, IM_COL32(80, 80, 90, 255));
+
+        const float drift_left_margin = 28.0f;
+        const float drift_right_margin = 20.0f;
+        const float drift_top_margin = 20.0f;
+        const float drift_bottom_margin = 24.0f;
+        const float drift_plot_left = drift_canvas_pos.x + drift_left_margin;
+        const float drift_plot_right = drift_canvas_end.x - drift_right_margin;
+        const float drift_plot_top = drift_canvas_pos.y + drift_top_margin;
+        const float drift_plot_bottom = drift_canvas_end.y - drift_bottom_margin;
+        const float drift_plot_width = drift_plot_right - drift_plot_left;
+        const float drift_plot_height = drift_plot_bottom - drift_plot_top;
+        const float drift_center_x = drift_plot_left + (drift_plot_width * 0.5f);
+
+        auto map_drift_x = [&](float lateral_offset_m) -> float {
+            return drift_center_x + (lateral_offset_m / drift_lateral_scale_m) * (drift_plot_width * 0.5f);
+        };
+        auto map_drift_y = [&](float forward_range_m) -> float {
+            return drift_plot_bottom - (forward_range_m / drift_range_scale_m) * drift_plot_height;
+        };
+
+        for (int i = 0; i <= 5; ++i) {
+            const float grid_x_m = drift_range_step_m * static_cast<float>(i);
+            const float gy = map_drift_y(grid_x_m);
+            drift_draw_list->AddLine(ImVec2(drift_plot_left, gy), ImVec2(drift_plot_right, gy), IM_COL32(60, 60, 70, 150), 1.0f);
+
+            char tick_label[32];
+            const float tick_display = grid_x_m * range_m_to_display;
+            std::snprintf(tick_label, sizeof(tick_label), "%.0f", tick_display);
+            drift_draw_list->AddText(ImVec2(drift_plot_left + 3.0f, gy - 8.0f), IM_COL32(180, 180, 190, 255), tick_label);
+        }
+
+        const float drift_right_tick_x = map_drift_x(drift_lateral_scale_m * 0.5f);
+        const float drift_left_tick_x = map_drift_x(-drift_lateral_scale_m * 0.5f);
+        drift_draw_list->AddLine(ImVec2(drift_center_x, drift_plot_top), ImVec2(drift_center_x, drift_plot_bottom), IM_COL32(170, 170, 180, 220), 1.0f);
+        drift_draw_list->AddLine(ImVec2(drift_right_tick_x, drift_plot_top), ImVec2(drift_right_tick_x, drift_plot_bottom), IM_COL32(70, 70, 80, 130), 1.0f);
+        drift_draw_list->AddLine(ImVec2(drift_left_tick_x, drift_plot_top), ImVec2(drift_left_tick_x, drift_plot_bottom), IM_COL32(70, 70, 80, 130), 1.0f);
+        drift_draw_list->AddLine(ImVec2(drift_plot_left, drift_plot_bottom), ImVec2(drift_plot_right, drift_plot_bottom), IM_COL32(120, 120, 130, 180), 1.0f);
+
+        ImVec2 drift_points[sample_count + 1];
+        if (!g_state.top_down_show_required_angle) {
+            for (int i = 0; i <= sample_count; ++i) {
+                const float t = static_cast<float>(i) / static_cast<float>(sample_count);
+                const float forward_range_m = t * drift_range_m;
+                const float lateral_offset_m = lateral_m * t * t;
+                drift_points[i] = ImVec2(map_drift_x(lateral_offset_m), map_drift_y(forward_range_m));
+            }
+            drift_draw_list->AddPolyline(drift_points, sample_count + 1, IM_COL32(255, 180, 90, 255), ImDrawFlags_None, 2.0f);
+        } else {
+            const ImVec2 aim_start(map_drift_x(0.0f), map_drift_y(0.0f));
+            const ImVec2 aim_end(map_drift_x(lateral_m), map_drift_y(drift_range_m));
+            drift_draw_list->AddLine(aim_start, aim_end, IM_COL32(90, 220, 255, 255), 2.0f);
+        }
+
+        const ImVec2 drift_muzzle_pt(map_drift_x(0.0f), map_drift_y(0.0f));
+        const ImVec2 drift_impact_pt(map_drift_x(lateral_m), map_drift_y(drift_range_m));
+        drift_draw_list->AddCircleFilled(drift_muzzle_pt, 3.5f, IM_COL32(130, 255, 130, 255));
+        drift_draw_list->AddCircleFilled(drift_impact_pt, 4.0f, IM_COL32(255, 90, 90, 255));
+        drift_draw_list->AddText(ImVec2(drift_muzzle_pt.x + 6.0f, drift_muzzle_pt.y - 16.0f), IM_COL32(200, 230, 200, 255), "Muzzle");
+        drift_draw_list->AddText(ImVec2(drift_impact_pt.x - 56.0f, drift_impact_pt.y - 16.0f), IM_COL32(230, 200, 200, 255), g_state.top_down_show_required_angle ? "Aim Point" : "Impact");
+
+        drift_draw_list->AddText(ImVec2(drift_plot_left + 4.0f, drift_plot_top - 16.0f), IM_COL32(190, 190, 200, 255), range_units);
+
+        char center_label[64];
+        std::snprintf(center_label, sizeof(center_label), "Centerline (0 %s)", drift_units);
+        drift_draw_list->AddText(ImVec2(drift_center_x + 4.0f, drift_plot_top + 2.0f), IM_COL32(170, 190, 220, 255), center_label);
+
+        char top_tick_label[64];
+        const float top_tick_display = (drift_lateral_scale_m * 0.5f) * offset_m_to_display;
+        std::snprintf(top_tick_label, sizeof(top_tick_label), "+%.1f %s", top_tick_display, drift_units);
+        drift_draw_list->AddText(ImVec2(drift_right_tick_x + 4.0f, drift_plot_top + 2.0f), IM_COL32(150, 150, 165, 255), top_tick_label);
+
+        char bot_tick_label[64];
+        std::snprintf(bot_tick_label, sizeof(bot_tick_label), "-%.1f %s", top_tick_display, drift_units);
+        drift_draw_list->AddText(ImVec2(drift_left_tick_x - 56.0f, drift_plot_top + 2.0f), IM_COL32(150, 150, 165, 255), bot_tick_label);
 
         ImGui::End();
 

@@ -384,7 +384,7 @@ void BCE_Engine::computeSolution() {
     // Convert drop/windage to MOA holds
     float range = lrf_range_m_;
     float drop_moa = 0.0f;
-    float windage_moa = 0.0f;
+    float wind_from_wind_moa = 0.0f;
 
     if (range > 0.0f) {
         // The drop relative to the zero'd sight line:
@@ -403,22 +403,28 @@ void BCE_Engine::computeSolution() {
 
         // Convert to angular adjustment in MOA
         drop_moa = -(relative_drop / range) * BCE_RAD_TO_MOA;
-        windage_moa = -(result.windage_at_target_m / range) * BCE_RAD_TO_MOA;
+        wind_from_wind_moa = -(result.windage_at_target_m / range) * BCE_RAD_TO_MOA;
     }
+
+    // Build directional windage components
+    const float windage_earth_spin_moa = result.coriolis_wind_moa + result.spin_drift_moa;
+    const float windage_offsets_moa = boresight_.horizontal_moa + reticle_.horizontal_moa;
 
     // Add corrections
     drop_moa += result.coriolis_elev_moa;
-    windage_moa += result.coriolis_wind_moa + result.spin_drift_moa;
+    float windage_moa = wind_from_wind_moa + windage_earth_spin_moa;
 
     // Add boresight and reticle offsets
     drop_moa += boresight_.vertical_moa + reticle_.vertical_moa;
-    windage_moa += boresight_.horizontal_moa + reticle_.horizontal_moa;
+    windage_moa += windage_offsets_moa;
 
     // Apply cant correction
+    const float windage_before_cant_moa = windage_moa;
     float cant_elev, cant_wind;
     CantCorrection::apply(roll, drop_moa, cant_elev, cant_wind);
     drop_moa = cant_elev;
     windage_moa += cant_wind;
+    const float windage_cant_moa = windage_moa - windage_before_cant_moa;
 
     // Populate firing solution
     solution_.solution_mode = static_cast<uint32_t>(BCE_Mode::SOLUTION_READY);
@@ -437,6 +443,10 @@ void BCE_Engine::computeSolution() {
     solution_.coriolis_windage_moa = result.coriolis_wind_moa;
     solution_.coriolis_elevation_moa = result.coriolis_elev_moa;
     solution_.spin_drift_moa = result.spin_drift_moa;
+    solution_.wind_only_windage_moa = wind_from_wind_moa;
+    solution_.earth_spin_windage_moa = windage_earth_spin_moa;
+    solution_.offsets_windage_moa = windage_offsets_moa;
+    solution_.cant_windage_moa = windage_cant_moa;
 
     solution_.cant_angle_deg = roll * BCE_RAD_TO_DEG;
     solution_.heading_deg_true = heading_true;

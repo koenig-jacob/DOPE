@@ -170,6 +170,10 @@ struct FiringSolution {
     float coriolis_windage_moa;       // Coriolis windage component
     float coriolis_elevation_moa;     // Coriolis elevation component
     float spin_drift_moa;            // Spin drift component
+    float wind_only_windage_moa;      // Wind-only windage component
+    float earth_spin_windage_moa;     // Coriolis + spin drift windage
+    float offsets_windage_moa;        // Boresight + reticle horizontal offsets
+    float cant_windage_moa;           // Windage added by cant correction
 
     float cant_angle_deg;            // Current cant / roll angle
     float heading_deg_true;          // True heading from AHRS + mag
